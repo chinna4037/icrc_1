@@ -32,4 +32,8 @@ module {
         args:TransferArgs;
     };
 
+    public type BurnError={
+        #BadBurn:{minBurnAmount:Nat};
+        #InsufficientFunds : {balance:Nat};
+    };
 }

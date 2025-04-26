@@ -18,7 +18,6 @@ shared (msg) actor class ICRC1(
   _name:Text,
   _symbol : Text,
   decimalsOpt : ?Nat8,
-  intialSupply : ?Nat,
 )=this{
   module TransferKey {
     public func equal(a: Types.TransferKey, b: Types.TransferKey): Bool {
@@ -84,60 +83,55 @@ shared (msg) actor class ICRC1(
   let PERMITTED_DRIFT:Int=2*60*1_000_000_000;
 
   let _decimals:Nat8=switch(decimalsOpt){
-    case (null) 18;
-    case (?x) if (x>=18) 18 else x;
+    case (null) 8;
+    case (?x) if (x>=8) 8 else x;
   };
 
   var _totalSupply=0;
 
-  let _intialSupply=switch(intialSupply){
-    case null 0;
-    case (?x) x;
-  };
-
   let _mintingAccount:Types.Account=Helper.getDefaultAccount(msg.caller);
 
-  // let defaultFee=25*Nat.pow(10,Nat8.toNat(_decimals)-2);
-  let defaultFee=1;
+  let defaultFee=25*Nat.pow(10,Nat8.toNat(_decimals)-2);
+  // let defaultFee=1;
   let multiplier=Nat.pow(10,Nat8.toNat(_decimals));
 
   var balances  = HashMap.HashMap<Types.Account, Nat>(0, Account.equal, Account.hash);
 
-  balances.put(_mintingAccount,_intialSupply);
-  _totalSupply+=(_intialSupply);
-
-  let anon_account:Types.Account=Helper.getDefaultAccount(Principal.fromText("2vxsx-fae"));
-  balances.put(anon_account,1_000_000);
+  // for debugging
+  // let anon_account:Types.Account=Helper.getDefaultAccount(Principal.fromText("2vxsx-fae"));
+  // balances.put(anon_account,1_000_000);
 
   let dedupmap = HashMap.HashMap<Types.TransferKey, Nat>(0, TransferKey.equal, TransferKey.hash);
   var blockHeight=0;
   
 
-  public query func name() : async Text{
+  public query func icrc1_name() : async Text{
     _name
   };
 
-  public query func symbol():async Text{
+  public query func icrc1_symbol():async Text{
     _symbol
   };
 
-  public query func decimals():async Nat8{
+  public query func icrc1_decimals():async Nat8{
     _decimals
   };
 
-  public query func fee():async Nat{
+  public query func icrc1_fee():async Nat{
     defaultFee
   };
 
-  public query func totalSupply():async Nat{
+  public query func icrc1_totalSupply():async Nat{
     _totalSupply/multiplier
   };
 
-  public query func mintingAccount():async ?Types.Account{
+  public query func icrc1_mintingAccount():async ?Types.Account{
     ?_mintingAccount
   };
 
-  public shared query (msg) func balanceOf(account:Types.Account):async Nat{
+  public shared query (msg) func icrc1_balanceOf(
+    account:Types.Account
+  ):async Nat{
     let correctedAccount=Helper.getAccount(account);
     switch(balances.get(correctedAccount)){
       case null {
@@ -148,7 +142,54 @@ shared (msg) actor class ICRC1(
     }
   };
 
-  public shared(msg) func transfer(args:Types.TransferArgs):async Result.Result<Nat,Types.TransferError>{
+  public shared (msg) func icrc1_mint(
+    fromSubAccount:?Types.SubAccount,
+    receiver:Types.Account,
+    amount:Nat
+  ):async Result.Result<Nat,{#UnauthorizedAccount}>{
+    let caller:Types.Account={
+      owner=msg.caller;
+      subaccount=fromSubAccount;
+    };
+    let correctedCallerAccount=Helper.getAccount(caller);
+    if (not Account.equal(correctedCallerAccount,_mintingAccount)){
+      return #err(#UnauthorizedAccount);
+    };
+    let receiverBalance=await icrc1_balanceOf(receiver);
+    balances.put(receiver,Nat.add(receiverBalance,amount));
+    _totalSupply+=amount;
+    #ok(amount);
+  };
+
+
+  let minBurnAmount=Nat.mul(10,multiplier); //minimum 10 token to burn
+  public shared (msg) func icrc1_burn(
+    fromSubAccount:?Types.SubAccount,
+    amount:Nat
+  ):async Result.Result<Nat,Types.BurnError>{
+    if (amount < minBurnAmount ){
+      return #err(#BadBurn {minBurnAmount=minBurnAmount});
+    };
+    let fromAccount:Types.Account={
+      owner=msg.caller;
+      subaccount=fromSubAccount;
+    };
+    let correctdFromAccount=Helper.getAccount(fromAccount);
+
+    let fromBalance=await icrc1_balanceOf(correctdFromAccount);
+    if (fromBalance < amount){
+      return #err(#InsufficientFunds {balance=fromBalance});
+    };
+
+    balances.put(correctdFromAccount,Nat.sub(fromBalance,amount));
+    let mintingAccountBalance=await icrc1_balanceOf(_mintingAccount);
+    balances.put(_mintingAccount,Nat.add(mintingAccountBalance,amount));
+    _totalSupply-=amount;
+    #ok(amount);
+  };
+
+
+  public shared(msg) func icrc1_transfer(args:Types.TransferArgs):async Result.Result<Nat,Types.TransferError>{
 
     //Fee validation
     let feeToCharge= switch(args.fee) {
@@ -195,15 +236,17 @@ shared (msg) actor class ICRC1(
     
 
     //Balance validation
-    let fromBalance= await balanceOf(correctdFrom);
+    let fromBalance= await icrc1_balanceOf(correctdFrom);
     let total=Nat.add(args.amount,feeToCharge);
     if ( Nat.less(fromBalance,total)){
         return #err(#InsufficientFunds {balance=fromBalance});
     };
 
     balances.put(correctdFrom,Nat.sub(fromBalance,total));
-    let toBalance=await balanceOf(correctedTo);
+    let toBalance=await icrc1_balanceOf(correctedTo);
     balances.put(correctedTo,Nat.add(toBalance,args.amount));
+    let mintingAccountBalance=await icrc1_balanceOf(_mintingAccount);
+    balances.put(_mintingAccount,Nat.add(mintingAccountBalance,feeToCharge));
 
     dedupmap.put(transferKey,blockHeight);
     blockHeight+=1;
