@@ -1,6 +1,6 @@
 {
   "canisters": {
-    "icrc_1_backend": {
+    "ICRC1": {
       "main": "src/icrc_1_backend/main.mo",
       "type": "motoko"
     }
